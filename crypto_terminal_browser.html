@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Babukumar's Crypto Terminal</title>
+<style>
+:root{--bg:#050805;--fg:#d7ffd7;--muted:#82a982;--line:#245224;--red:#ff6868;--green:#63ff86;--yellow:#ffe66d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.wrap{max-width:1050px;margin:auto;padding:18px}
+h1{text-align:center;font-size:clamp(22px,5vw,40px);margin:6px 0;color:var(--green);letter-spacing:2px}
+.sub{text-align:center;color:var(--muted);margin-bottom:18px}
+.card{border:1px solid var(--line);padding:14px;margin:10px 0;background:#071007;box-shadow:0 0 18px #001900}
+.title{text-align:center;color:var(--yellow);font-weight:700;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px}
+.row{display:grid;grid-template-columns:90px 1fr 130px;gap:8px;padding:6px 0;border-bottom:1px dashed #183718}
+.row:last-child{border-bottom:0}
+.coin{font-weight:700}.right{text-align:right}
+.up{color:var(--green)}.down{color:var(--red)}.side{color:var(--yellow)}
+pre{white-space:pre-wrap;word-break:break-word;margin:4px 0;color:#bfffbf}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,button{font:inherit;background:#020602;color:var(--fg);border:1px solid var(--line);padding:8px;border-radius:5px}
+button{cursor:pointer}button:hover{border-color:var(--green)}
+.small{font-size:12px;color:var(--muted)}
+.badge{display:inline-block;padding:3px 7px;border:1px solid var(--line);border-radius:4px}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:14px}
+@media(max-width:600px){.row{grid-template-columns:60px 1fr 105px;font-size:12px}.wrap{padding:8px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>BABUKUMAR'S CRYPTO TERMINAL</h1>
+<div class="sub">LIVE MARKET DASHBOARD • KRAKEN</div>
+
+<div class="card"><div class="title">LIVE PRICE</div><div id="live"></div></div>
+<div class="card"><div class="title">REAL 24H MOVEMENT</div><pre id="graphs">Loading...</pre><div class="small">◀ 24 HOURS AGO &nbsp;&nbsp;&nbsp;&nbsp; NOW ▶</div></div>
+<div class="card"><div class="title">24H HIGH / LOW</div><div id="hl"></div></div>
+<div class="card"><div class="title">MULTI-TIMEFRAME</div><div id="mtf"></div></div>
+<div class="card"><div class="title">MARKET STATUS</div><div id="status"></div></div>
+<div class="card"><div class="title">24H VOLUME</div><div id="volume"></div></div>
+<div class="card"><div class="title">SUPPORT / RESISTANCE</div><div id="sr"></div></div>
+
+<div class="card">
+  <div class="title">CUSTOM PRICE ALERT</div>
+  <div class="controls">
+    <select id="alertCoin" style="font:inherit;background:#020602;color:#d7ffd7;border:1px solid #245224;padding:8px">
+      <option>BTC</option><option>ETH</option><option>SOL</option><option>XAUT</option>
+    </select>
+    <input id="alertPrice" type="number" step="any" placeholder="Target price">
+    <button onclick="setAlert()">Set Alert</button>
+    <button onclick="clearAlert()">Clear</button>
+  </div>
+  <div id="alerts" style="margin-top:10px"></div>
+</div>
+
+<div class="card"><div class="title">TRADING SESSION</div><div id="session"></div></div>
+<div class="card"><div class="title">PRICE ALERT</div><div id="majorAlert">Checking...</div></div>
+
+<footer>
+  <div id="updated">Updated: --</div>
+  <div>Refresh: 10 seconds • Prices: Kraken • Graph: Real 24H • Trend: 15M / 1H / 4H / 1D • Volume: 24H</div>
+</footer>
+</div>
+
+<script>
+const COINS={
+ BTC:{pair:"XBTUSD",kraken:"XXBTZUSD",support:82000,resistance:85000},
+ ETH:{pair:"ETHUSD",kraken:"XETHZUSD",support:2600,resistance:2800},
+ SOL:{pair:"SOLUSD",kraken:"SOLUSD",support:115,resistance:125},
+ XAUT:{pair:"XAUTUSD",kraken:"XAUSTZUSD",support:4000,resistance:4300}
+};
+const ids=Object.keys(COINS);
+let data={}, alerts=JSON.parse(localStorage.getItem("cryptoAlerts")||"{}");
+const fmt=(n,d=2)=>Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+function cls(v){return v>0?"up":v<0?"down":"side"}
+function arrow(v){return v>0?"▲ UP":v<0?"▼ DOWN":"• SIDE"}
+function spark(vals){
+  if(!vals?.length)return "—";
+  const chars="▁▂▃▄▅▆▇█";
+  const mn=Math.min(...vals),mx=Math.max(...vals),span=mx-mn||1;
+  return vals.map(v=>chars[Math.max(0,Math.min(7,Math.round((v-mn)/span*7)))]).join("");
+}
+async function api(path){
+  const r=await fetch("https://api.kraken.com/0/public/"+path);
+  const j=await r.json(); if(j.error?.length) throw new Error(j.error.join(", "));
+  return j.result;
+}
+async function load(){
+  try{
+    const pairs=ids.map(k=>COINS[k].pair).join(",");
+    const t=await api("Ticker?pair="+encodeURIComponent(pairs));
+    for(const k of ids){
+      const key=Object.keys(t).find(x=>x.toUpperCase().includes(COINS[k].pair.replace("USD","").replace("XBT","XBT").toUpperCase()));
+      const q=key?t[key]:null;
+      if(!q)continue;
+      data[k]=data[k]||{};
+      data[k].price=Number(q.c[0]); data[k].open24=Number(q.o);
+      data[k].high=Number(q.h[1]||q.h[0]); data[k].low=Number(q.l[1]||q.l[0]);
+      data[k].vol=Number(q.v[1]||q.v[0]);
+      data[k].change=(data[k].price/data[k].open24-1)*100;
+    }
+    renderLive(); renderHL(); renderVolume(); renderSR(); renderStatus(); renderAlerts();
+    await loadGraphsAndMTF();
+    renderSession(); document.getElementById("updated").textContent="Updated: "+new Date().toLocaleTimeString();
+  }catch(e){document.getElementById("updated").textContent="Update error: "+e.message}
+}
+async function ohlc(pair,interval){
+  const r=await api("OHLC?pair="+encodeURIComponent(pair)+"&interval="+interval);
+  const key=Object.keys(r).find(x=>x!=="last");
+  return key?r[key]:[];
+}
+async function loadGraphsAndMTF(){
+  const graphLines=[], mtfLines=[];
+  for(const k of ids){
+    try{
+      const h=await ohlc(COINS[k].pair,60);
+      const closes=h.slice(-24).map(x=>Number(x[4]));
+      graphLines.push(k.padEnd(5)+" "+spark(closes));
+      data[k].graph=closes;
+    }catch{graphLines.push(k.padEnd(5)+" —")}
+    const periods=[[15,"15M"],[60,"1H"],[240,"4H"],[1440,"1D"]];
+    mtfLines.push(`<div class="row"><div class="coin">${k}</div><div>${periods.map(p=>`<span class="badge" id="${k}${p[1]}">…</span>`).join(" ")}</div><div></div></div>`);
+  }
+  document.getElementById("graphs").textContent=graphLines.join("\n");
+  document.getElementById("mtf").innerHTML=mtfLines.join("");
+  for(const k of ids){
+    for(const [int,label] of [[15,"15M"],[60,"1H"],[240,"4H"],[1440,"1D"]]){
+      try{
+        const h=await ohlc(COINS[k].pair,int), a=h[h.length-2], b=h[h.length-1];
+        const pct=(Number(b[4])/Number(a[4])-1)*100;
+        const el=document.getElementById(k+label);
+        el.className="badge "+cls(pct); el.textContent=arrow(pct)+" "+(pct>=0?"+":"")+pct.toFixed(2)+"%";
+      }catch{}
+    }
+  }
+}
+function renderLive(){
+ document.getElementById("live").innerHTML=ids.map(k=>`<div class="row"><div class="coin">${k}</div><div>$ ${fmt(data[k].price)}</div><div class="${cls(data[k].change)} right">${data[k].change>=0?"▲":"▼"} ${data[k].change>=0?"+":""}${data[k].change.toFixed(2)}%</div></div>`).join("");
+}
+function renderHL(){
+ document.getElementById("hl").innerHTML=ids.map(k=>`<div class="row"><div class="coin">${k}</div><div>H: $${fmt(data[k].high)}<br>L: $${fmt(data[k].low)}</div><div></div></div>`).join("");
+}
+function renderVolume(){
+ document.getElementById("volume").innerHTML=ids.map(k=>{
+   const v=data[k].vol; const act=v>1000000?"🔥 HIGH ACTIVITY":"✓ NORMAL";
+   return `<div class="row"><div class="coin">${k}</div><div>Volume: ${v.toLocaleString("en-US",{maximumFractionDigits:2})}</div><div>${act}</div></div>`;
+ }).join("");
+}
+function renderSR(){
+ document.getElementById("sr").innerHTML=ids.map(k=>{
+   const d=data[k], c=COINS[k], sd=(d.price/c.support-1)*100, rd=(c.resistance/d.price-1)*100;
+   return `<div class="row"><div class="coin">${k}</div><div>S:$${fmt(c.support)} R:$${fmt(c.resistance)}<br>S distance: ${sd>=0?"+":""}${sd.toFixed(2)}%<br>R distance: ${rd>=0?"+":""}${rd.toFixed(2)}%</div><div>✓ NORMAL</div></div>`;
+ }).join("");
+}
+function renderStatus(){
+ const avg=ids.reduce((s,k)=>s+data[k].change,0)/ids.length;
+ document.getElementById("status").innerHTML=ids.map(k=>`<div class="row"><div class="coin">${k}</div><div>Trend : <span class="${cls(data[k].change)}">${arrow(data[k].change)}</span></div><div></div></div>`).join("")+
+ `<div style="text-align:center;margin-top:8px">Market Mood : <span class="${cls(avg)}">${avg<-.5?"BEARISH":avg>.5?"BULLISH":"NEUTRAL"}</span></div>`;
+}
+function setAlert(){
+ const k=document.getElementById("alertCoin").value,p=Number(document.getElementById("alertPrice").value);
+ if(p>0){alerts[k]=p;localStorage.setItem("cryptoAlerts",JSON.stringify(alerts));renderAlerts()}
+}
+function clearAlert(){const k=document.getElementById("alertCoin").value;delete alerts[k];localStorage.setItem("cryptoAlerts",JSON.stringify(alerts));renderAlerts()}
+function renderAlerts(){
+ document.getElementById("alerts").innerHTML=ids.map(k=>alerts[k]?`${k} ✓ Alert: $${fmt(alerts[k])}`:`${k} ✓ No custom alert`).join("<br>");
+ const fired=ids.filter(k=>alerts[k]&&(data[k].price>=alerts[k]||data[k].price<=alerts[k]));
+ if(fired.length){
+   document.getElementById("majorAlert").innerHTML=`<span class="yellow">⚠ Price alert: ${fired.join(", ")}</span>`;
+ }else document.getElementById("majorAlert").textContent="✓ No major price alerts";
+}
+function renderSession(){
+ const h=new Date().getUTCHours()+new Date().getUTCMinutes()/60;
+ let s;
+ if(h>=0&&h<8) s="🌙 ASIA / OFF SESSION";
+ else if(h>=7&&h<16) s="☀️ LONDON SESSION";
+ else if(h>=12&&h<21) s="🇺🇸 NEW YORK SESSION";
+ else s="🌙 OFF SESSION";
+ document.getElementById("session").innerHTML=`<div style="text-align:center">${s}</div>`;
+}
+load(); setInterval(load,10000);
+</script>
+</body>
+</html>
